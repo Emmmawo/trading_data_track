@@ -37,14 +37,14 @@ jobs:
       - name: Send Email with links
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}      # 587(STARTTLS) 或 465(SSL)
+          server_address: smtp.gmail.com
+          server_port: 465      # 587(STARTTLS) 或 465(SSL)
           secure: true                                # 465 用 true；587 一般也可以 true
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          from: ${{ secrets.GMAIL_USER }}
+          to: ${{ secrets.GMAIL_USER }}   # 多个用逗号分隔
           subject: "Daily Crypto Tracks Report"
-          from: ${{ secrets.SMTP_FROM }}
-          to: ${{ secrets.RECIPIENT_EMAIL }}         # 多个用逗号分隔
           html_body: |
             <p>Tracks report (GitHub Pages):</p>
             <ul>
