@@ -35,18 +35,17 @@ jobs:
           git push
 
       - name: Send Email with links
-        if: ${{ success() }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
+          server_port: ${{ secrets.SMTP_PORT }}      # 587(STARTTLS) 或 465(SSL)
+          secure: true                                # 465 用 true；587 一般也可以 true
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: "Daily Crypto Tracks Report"
-          to: ${{ secrets.RECIPIENT_EMAIL }}
           from: ${{ secrets.SMTP_FROM }}
-          content_type: text/html
-          body: |
+          to: ${{ secrets.RECIPIENT_EMAIL }}         # 多个用逗号分隔
+          html_body: |
             <p>Tracks report (GitHub Pages):</p>
             <ul>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Chains%20-%20L1.html">Chains - L1</a></li>
@@ -55,3 +54,7 @@ jobs:
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/RWA.html">RWA</a></li>
             </ul>
             <p>Full index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</p>
+    # 可选附件（多个用换行或逗号）
+    # attachments: |
+    #   docs/tracks/Chains - L1.html
+    #   docs/tracks/Stablecoins.html
