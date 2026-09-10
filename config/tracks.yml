@@ -1,0 +1,32 @@
+global:
+  lookback_days: 1095      # 3年
+  top_k: 5
+  cg_sleep_sec: 0.6        # CoinGecko 速率控制
+  output_dir: "docs/tracks"
+
+tracks:
+  - name: Chains - L1
+    metric: mcap
+    source: coingecko
+    selection:
+      mode: whitelist_ids
+      ids: ["bitcoin","ethereum","solana","binancecoin","cardano","avalanche-2","tron","toncoin","polkadot","internet-computer"]
+    plot:
+      include_price_for_top: true
+
+  - name: Stablecoins
+    metric: supply_usd
+    source: defillama_stablecoins
+    selection:
+      mode: top_by_supply
+      blacklist_symbols: ["UST"]
+
+  - name: DeFi - Total
+    metric: tvl
+    source: defillama_defi_total
+    selection: { mode: total }
+
+  - name: RWA
+    metric: tvl
+    source: defillama_rwa
+    selection: { mode: rwa_projects }
