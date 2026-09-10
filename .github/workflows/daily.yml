@@ -1,0 +1,57 @@
+name: daily-tracks
+
+on:
+  schedule:
+    - cron: "30 0 * * *"   # 00:30 UTC
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run tracks
+        run: python scripts/run_tracks.py --config config/tracks.yml
+
+      - name: Build index page
+        run: python scripts/build_index.py --docs docs/tracks
+
+      - name: Commit and push docs
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs
+          git commit -m "daily update $(date -u +%F)" || echo "no changes"
+          git push
+
+      - name: Send Email with links
+        if: ${{ success() }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "Daily Crypto Tracks Report"
+          to: ${{ secrets.RECIPIENT_EMAIL }}
+          from: ${{ secrets.SMTP_FROM }}
+          content_type: text/html
+          body: |
+            <p>Tracks report (GitHub Pages):</p>
+            <ul>
+              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Chains%20-%20L1.html">Chains - L1</a></li>
+              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Stablecoins.html">Stablecoins</a></li>
+              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/DeFi%20-%20Total.html">DeFi - Total</a></li>
+              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/RWA.html">RWA</a></li>
+            </ul>
+            <p>Full index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</p>
