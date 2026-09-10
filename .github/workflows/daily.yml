@@ -21,10 +21,10 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Run tracks
-        run: python -m scripts/run_tracks --config config/tracks.yml
+        run: python -m scripts.run_tracks --config config/tracks.yml
 
       - name: Build index page
-        run: python -m scripts/build_index --docs docs/tracks
+        run: python -m scripts.build_index --docs docs/tracks
 
       - name: Commit and push docs
         run: |
