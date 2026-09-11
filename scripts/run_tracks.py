@@ -1,7 +1,8 @@
 # scripts/run_tracks.py
 # usage: python -m scripts.run_tracks --config config/tracks.yml
 
-import sys, argparse, json, time, random
+import sys, argparse, json, time, random, re
+from io import StringIO
 from pathlib import Path
 import requests, pandas as pd
 import yaml, plotly.express as px
@@ -64,6 +65,39 @@ def http_get_json(url, params=None, max_retry=8):
             print(f"[WARN] exception on {url}, retry in {sleep_s:.2f}s: {e}")
             time.sleep(sleep_s)
     raise RuntimeError("unreachable")
+    
+def http_get_text(url, params=None, max_retry=8):
+    """
+    稳健 GET 文本：用于 CSV 等非 JSON 响应。
+    """
+    backoff = 1.2
+    for i in range(max_retry):
+        try:
+            _rate_limit()
+            r = requests.get(
+                url,
+                headers={
+                    "User-Agent": UA,
+                    "Accept": "text/csv,application/json;q=0.9,*/*;q=0.8",
+                },
+                params=params,
+                timeout=60,
+            )
+            if r.status_code in (429, 403, 500, 502, 503, 504):
+                sleep_s = (backoff ** i) + random.uniform(0, 0.5)
+                print(f"[WARN] {r.status_code} on {url}, retry in {sleep_s:.2f}s")
+                time.sleep(sleep_s)
+                continue
+            r.raise_for_status()
+            return r.text
+        except requests.RequestException as e:
+            if i == max_retry - 1:
+                print(f"[ERROR] GET fail {url}: {e}")
+                raise
+            sleep_s = (backoff ** i) + random.uniform(0, 0.5)
+            print(f"[WARN] exception on {url}, retry in {sleep_s:.2f}s: {e}")
+            time.sleep(sleep_s)
+    raise RuntimeError("unreachable")
 
 def save_raw(obj, name):
     ts = pd.Timestamp.now(tz="UTC").strftime("%Y%m%d%H%M%S")
@@ -115,6 +149,13 @@ def ts_to_date(ts):
         return pd.to_datetime(s, utc=True).date()
     except Exception:
         return None
+
+RWA_EXCLUDED_SYMBOLS = {"cbbtc"}
+
+def safe_slug(value):
+    s = str(value or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-") or "unknown"
 
 # ---------- Stablecoins: /stablecoincharts/all + /stablecoins + /stablecoin/{id} ----------
 # 参考文档: [1] /stablecoincharts/all, /stablecoins, /stablecoin/{asset}
@@ -250,26 +291,50 @@ def fetch_defi_total_and_top(top_k=3):
 
     return out, saved
 
-# ---------- RWA: /charts/rwa + /rwa (list) ----------
-# 参考文档: [2] /charts/rwa, /rwa
+# ---------- RWA: RWA Pipe /market + /export/tokens ----------
+# 口径：RWA Pipe tokenized RWA TVL，排除 stablecoin category。
+# 注意：免费 CSV 历史导出请求上限为 365 天；实际返回日期可能更少，本地 CSV 会每天 merge，之后可逐步累积更长历史。
 def fetch_rwa_and_top(top_k=5):
-    j = http_get_json("https://api.llama.fi/charts/rwa")  # [2]
-    df = pd.DataFrame(j)
-    if df.empty:
-        out = pd.DataFrame(columns=["date","rwa_total"])
+    market = http_get_json(
+        "https://rwapipe.com/api/market",
+        params={"excludeStablecoins": "true"},
+    )
+
+    csv_text = http_get_text(
+        "https://rwapipe.com/api/export/tokens",
+        params={"days": 365},
+    )
+    hist = pd.read_csv(StringIO(csv_text))
+
+    if not hist.empty:
+        hist["date"] = pd.to_datetime(hist["date"], utc=True).dt.date
+        hist["category"] = hist["category"].fillna("").astype(str).str.lower()
+        hist["symbol"] = hist["symbol"].fillna("").astype(str)
+        hist["tvl_usd"] = pd.to_numeric(hist["tvl_usd"], errors="coerce").fillna(0)
+        hist = hist[hist["category"] != "stablecoin"]
+        hist = hist[~hist["symbol"].str.lower().isin(RWA_EXCLUDED_SYMBOLS)]
+
+    if hist.empty:
+        out = pd.DataFrame(columns=["date", "rwa_total"])
     else:
-        df["date"] = pd.to_datetime(df["date"], unit="s", utc=True).dt.date
-        val_col = None
-        for k in ["totalLiquidityUSD","totalValueLockedUSD","tvl","value","total"]:
-            if k in df.columns:
-                val_col = k; break
-        if val_col is None:
-            out = pd.DataFrame(columns=["date","rwa_total"])
-        else:
-            out = df.rename(columns={val_col:"rwa_total"})[["date","rwa_total"]]
+        out = (
+            hist.groupby("date", as_index=False)["tvl_usd"]
+            .sum()
+            .rename(columns={"tvl_usd": "rwa_total"})
+        )
+
+    # 如果 CSV 临时为空，至少用 /market 的当前总量补今天，避免整条 RWA track 失败。
+    if out.empty:
+        summary = market.get("summary") or {}
+        current = summary.get("rwaTVL") or summary.get("totalTVL")
+        if current is not None:
+            out = pd.DataFrame([{
+                "date": pd.Timestamp.now(tz="UTC").date(),
+                "rwa_total": float(current),
+            }])
 
     path = DATA_PROC / "rwa_total.csv"
-    old = read_csv(path, ["date","rwa_total"])
+    old = read_csv(path, ["date", "rwa_total"])
     if not out.empty:
         out["date"] = pd.to_datetime(out["date"]).dt.date
         out = merge_on_date(old, out)
@@ -278,35 +343,52 @@ def fetch_rwa_and_top(top_k=5):
         out = old
     assert_non_empty(out, "RWA total")
 
-    plist = []
-    try:
-        projs = http_get_json("https://api.llama.fi/rwa")  # [2]
-        if isinstance(projs, dict) and "projects" in projs:
-            plist = projs["projects"]
-    except Exception:
-        pass
-    if not plist:
-        allp = http_get_json("https://api.llama.fi/protocols")  # [2]
-        plist = [p for p in allp if str(p.get("category","")).upper()=="RWA"]
-    pdf = pd.DataFrame([{"name": p.get("name"),
-                         "slug": p.get("slug") or p.get("name","").lower().replace(" ","-"),
-                         "tvl": p.get("tvl", 0) or 0} for p in plist if p.get("name")])
-    top = pdf.sort_values("tvl", ascending=False).head(top_k)
+    tokens = market.get("data") or []
+    latest = pd.DataFrame([{
+        "name": t.get("name") or t.get("symbol"),
+        "symbol": t.get("symbol") or "",
+        "chain": t.get("chain") or "",
+        "address": t.get("address") or "",
+        "category": str(t.get("category") or "").lower(),
+        "tvl": float(t.get("tvlUsd") or 0),
+    } for t in tokens if t.get("name") or t.get("symbol")])
+
+    if latest.empty:
+        return out, []
+
+    latest = latest[latest["category"] != "stablecoin"]
+    latest = latest[~latest["symbol"].str.lower().isin(RWA_EXCLUDED_SYMBOLS)]
+    top = latest.sort_values("tvl", ascending=False).head(top_k)
+
     saved = []
     for _, r in top.iterrows():
-        hist = http_get_json(f"https://api.llama.fi/protocol/{r['slug']}")  # [2]
-        rows = []
-        for pt in hist.get("tvl", []):
-            rows.append({"date": pd.to_datetime(pt.get("date"), unit="s", utc=True).date(),
-                         "tvl": pt.get("totalLiquidityUSD", 0)})
-        hdf = pd.DataFrame(rows)
-        if hdf.empty: continue
+        slug = safe_slug(f"{r['chain']}-{r['symbol']}-{r['address'][:8]}")
+        label = f"{r['symbol']} ({r['chain']})" if r["symbol"] else r["name"]
+
+        hdf = pd.DataFrame(columns=["date", "tvl"])
+        if not hist.empty and r["address"]:
+            mask = (
+                hist["chain"].fillna("").astype(str).str.lower().eq(str(r["chain"]).lower())
+                & hist["token_address"].fillna("").astype(str).str.lower().eq(str(r["address"]).lower())
+            )
+            hdf = hist.loc[mask, ["date", "tvl_usd"]].rename(columns={"tvl_usd": "tvl"})
+
+        if hdf.empty and r["tvl"]:
+            hdf = pd.DataFrame([{
+                "date": pd.Timestamp.now(tz="UTC").date(),
+                "tvl": r["tvl"],
+            }])
+
+        if hdf.empty:
+            continue
+
         hdf["date"] = pd.to_datetime(hdf["date"]).dt.date
-        pth = DATA_PROC / f"rwa_top_{r['slug']}.csv"
-        oldh = read_csv(pth, ["date","tvl"])
+        pth = DATA_PROC / f"rwa_top_{slug}.csv"
+        oldh = read_csv(pth, ["date", "tvl"])
         hdf = merge_on_date(oldh, hdf)
         write_csv(hdf, pth)
-        saved.append((r["name"], r["slug"]))
+        saved.append((label, slug))
+
     return out, saved
 
 # ---------- Chains (TVL): /v2/historicalChainTvl (all) + /v2/historicalChainTvl/{chain} ----------
@@ -422,7 +504,7 @@ def run_all(cfg):
         if h.empty: continue
         h = window_or_full(h, lookback)
         charts.append((f"{name} - TVL", fig_to_div(px.line(h, x="date", y="tvl", title=f"{name}"))))
-    plot_track_page("RWA", charts, "RWA: /charts/rwa; /rwa; /protocol/{slug} [2]")
+    plot_track_page("RWA", charts, "RWA: RWA Pipe /market and /export/tokens; excludes stablecoin category")
 
     # Chains
     chains_conf = next((t for t in cfg["tracks"] if t["source"].lower()=="defillama_chains"), None)
