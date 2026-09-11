@@ -23,7 +23,6 @@ def main():
 </body></html>"""
     Path("docs").mkdir(parents=True, exist_ok=True)
     Path("docs/index.html").write_text(body, encoding="utf-8")
-    # 禁用 Jekyll
     (Path("docs") / ".nojekyll").write_text("", encoding="utf-8")
 
 if __name__ == "__main__":
