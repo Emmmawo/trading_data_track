@@ -2,7 +2,7 @@ name: daily-tracks
 
 on:
   schedule:
-    - cron: "30 0 * * *"
+    - cron: "30 0 * * *"   # 每日 00:30 UTC
   workflow_dispatch: {}
 
 jobs:
@@ -11,54 +11,36 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Connectivity smoke test (DeFiLlama)
-        run: |
-          set -e
-          mkdir -p docs/debug
-          curl -sS "https://api.llama.fi/charts/rwa" | head -c 600 > docs/debug/rwa_smoke.json || true
-          curl -sS "https://stablecoins.llama.fi/overview" | head -c 600 > docs/debug/stable_smoke.json || true
-          curl -sS "https://api.llama.fi/overview/defi?excludeTotalChart=false&excludeProtocolChart=true&dataType=daily" | head -c 600 > docs/debug/defi_smoke.json || true
-          curl -sS "https://api.llama.fi/overview/chains?excludeTotalChart=false&excludeChains=true&dataType=daily" | head -c 600 > docs/debug/chains_smoke.json || true
-
-      - name: Prepare docs and debug dir
-        run: |
-          mkdir -p docs/debug
-          echo "ping $(date -u +%F\ %T)" > docs/debug/ping.txt
-          # 禁用 Jekyll，避免 assets 被忽略
-          touch docs/.nojekyll
-
-      - name: Commit ping first
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@users.noreply.github.com"
-          git add docs
-          git commit -m "debug ping $(date -u +%F\ %T)" || echo "no changes"
-          git push
-
-      - name: Run tracks
+      # 运行主脚本（脚本内会自动创建 data/ 与 docs/ 并写入 CSV 与 HTML）
+      - name: Run tracks (cache + incremental)
         run: python -m scripts.run_tracks --config config/tracks.yml
 
+      # 生成索引页，并写入 docs/.nojekyll（脚本里也会写，这里双保险）
       - name: Build index page
         run: python -m scripts.build_index --docs docs/tracks
 
-      - name: Commit and push docs
+      # 提交 data/ 与 docs/（本次运行产物）
+      - name: Commit and push artifacts
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          git add docs
+          git add data docs
           git commit -m "daily update $(date -u +%F)" || echo "no changes"
           git push
 
+      # 发送邮件（发给你自己），只发固定链接，避免附件问题
       - name: Send Email with links (Gmail app password)
         uses: dawidd6/action-send-mail@v3
         with:
@@ -78,5 +60,4 @@ jobs:
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/DeFi%20-%20Total.html">DeFi - Total</a></li>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/RWA.html">RWA</a></li>
             </ul>
-            <p>Debug snapshots: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/debug/</p>
             <p>Full index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</p>
