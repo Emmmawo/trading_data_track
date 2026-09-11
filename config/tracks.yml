@@ -24,5 +24,9 @@ tracks:
 
   - name: RWA
     metric: tvl
-    source: defillama_rwa
-    selection: { mode: rwa_projects }
+    source: rwapipe_rwa
+    selection:
+      mode: tokenized_rwa_tvl
+      exclude_stablecoins: true
+      blacklist_symbols: ["cbBTC"]
+      history_days: 365
