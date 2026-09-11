@@ -2,7 +2,7 @@ name: daily-tracks
 
 on:
   schedule:
-    - cron: "30 0 * * *"   # 00:30 UTC
+    - cron: "30 0 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -21,14 +21,14 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # 可选：DL 端点连通性快检，便于排障
       - name: Connectivity smoke test (DeFiLlama)
         run: |
           set -e
           mkdir -p docs/debug
-          echo "RWA total:" && curl -sS https://api.llama.fi/charts/rwa | head -c 300 > docs/debug/rwa.json || true
-          echo "Stable overview:" && curl -sS https://stablecoins.llama.fi/overview | head -c 300 > docs/debug/stable_overview.json || true
-          echo "DeFi overview:" && curl -sS "https://api.llama.fi/overview/defi?excludeTotalChart=false&excludeProtocolChart=true&dataType=daily" | head -c 300 > docs/debug/defi_overview.json || true
+          curl -sS "https://api.llama.fi/charts/rwa" | head -c 600 > docs/debug/rwa_smoke.json || true
+          curl -sS "https://stablecoins.llama.fi/overview" | head -c 600 > docs/debug/stable_smoke.json || true
+          curl -sS "https://api.llama.fi/overview/defi?excludeTotalChart=false&excludeProtocolChart=true&dataType=daily" | head -c 600 > docs/debug/defi_smoke.json || true
+          curl -sS "https://api.llama.fi/overview/chains?excludeTotalChart=false&excludeChains=true&dataType=daily" | head -c 600 > docs/debug/chains_smoke.json || true
 
       - name: Run tracks
         run: python -m scripts.run_tracks --config config/tracks.yml
@@ -63,4 +63,5 @@ jobs:
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/DeFi%20-%20Total.html">DeFi - Total</a></li>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/RWA.html">RWA</a></li>
             </ul>
+            <p>Debug snapshots: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/debug/</p>
             <p>Full index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</p>
