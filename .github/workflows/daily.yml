@@ -18,7 +18,17 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - run: pip install -r requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      # 可选：DL 端点连通性快检，便于排障
+      - name: Connectivity smoke test (DeFiLlama)
+        run: |
+          set -e
+          mkdir -p docs/debug
+          echo "RWA total:" && curl -sS https://api.llama.fi/charts/rwa | head -c 300 > docs/debug/rwa.json || true
+          echo "Stable overview:" && curl -sS https://stablecoins.llama.fi/overview | head -c 300 > docs/debug/stable_overview.json || true
+          echo "DeFi overview:" && curl -sS "https://api.llama.fi/overview/defi?excludeTotalChart=false&excludeProtocolChart=true&dataType=daily" | head -c 300 > docs/debug/defi_overview.json || true
 
       - name: Run tracks
         run: python -m scripts.run_tracks --config config/tracks.yml
@@ -34,27 +44,23 @@ jobs:
           git commit -m "daily update $(date -u +%F)" || echo "no changes"
           git push
 
-      - name: Send Email with links
+      - name: Send Email with links (Gmail app password)
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
-          server_port: 465      # 587(STARTTLS) 或 465(SSL)
-          secure: true                                # 465 用 true；587 一般也可以 true
+          server_port: 465
+          secure: true
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          from: ${{ secrets.GMAIL_USER }}
-          to: ${{ secrets.GMAIL_USER }}   # 多个用逗号分隔
+          from:    ${{ secrets.GMAIL_USER }}
+          to:      ${{ secrets.GMAIL_USER }}
           subject: "Daily Crypto Tracks Report"
           html_body: |
             <p>Tracks report (GitHub Pages):</p>
             <ul>
-              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Chains%20-%20L1.html">Chains - L1</a></li>
+              <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Chains%20(TVL).html">Chains (TVL)</a></li>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/Stablecoins.html">Stablecoins</a></li>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/DeFi%20-%20Total.html">DeFi - Total</a></li>
               <li><a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/tracks/RWA.html">RWA</a></li>
             </ul>
             <p>Full index: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</p>
-    # 可选附件（多个用换行或逗号）
-    # attachments: |
-    #   docs/tracks/Chains - L1.html
-    #   docs/tracks/Stablecoins.html
