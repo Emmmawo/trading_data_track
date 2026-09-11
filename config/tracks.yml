@@ -8,8 +8,6 @@ tracks:
     metric: tvl
     source: defillama_chains
     selection:
-      mode: top_by_chain_tvl
-      # 可选白名单，不写则按最新TVL取TopK：
       whitelist: ["Ethereum","Tron","BSC","Arbitrum","Solana","Base","Optimism"]
     plot: {}
 
@@ -17,7 +15,6 @@ tracks:
     metric: supply_usd
     source: defillama_stablecoins
     selection:
-      mode: top_by_supply
       blacklist_symbols: ["UST"]
 
   - name: DeFi - Total
