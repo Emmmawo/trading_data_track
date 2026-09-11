@@ -70,71 +70,69 @@ def window_or_full(df, lookback_days):
     w = df[df["date"] >= cutoff]
     return w if not w.empty else df
 
-# ---------- Stablecoins (修复：优先用 legacy 汇总，overview 失败不阻断) ----------
+# 替换原 fetch_stablecoins 函数
 def fetch_stablecoins():
-    # 1) 单币历史（Top5 用 + 汇总 total）
-    j2 = http_get_json("https://stablecoins.llama.fi/stablecoins?includePrices=true")
-    save_raw({"peggedAssets_count": len(j2.get("peggedAssets", []))}, "stable_legacy_meta")
-    rows=[]
-    for a in j2.get("peggedAssets", []):
-        sym = a.get("symbol"); 
-        if not sym: continue
-        hist = a.get("historicalCirculating")
-        if isinstance(hist, dict) and hist:
-            for k, v in hist.items():
-                try: d = pd.to_datetime(k).date()
-                except:
-                    try: d = pd.to_datetime(int(k), unit="s", utc=True).date()
-                    except: continue
-                rows.append({"date": d, "symbol": sym, "amount": float(v or 0)})
-        circ = a.get("circulating")
-        if isinstance(circ, list) and circ:
-            for pt in circ:
-                ts=pt.get("date"); val=pt.get("circulating") or pt.get("amount") or pt.get("value")
-                if ts is None or val is None: continue
-                d = pd.to_datetime(ts, unit="s", utc=True).date() if isinstance(ts,(int,float)) else pd.to_datetime(ts).date()
-                rows.append({"date": d, "symbol": sym, "amount": float(val)})
-    coins = pd.DataFrame(rows)
+    # 1) 总量历史（公开端点）：/stablecoincharts/all
+    all_series = http_get_json("https://stablecoins.llama.fi/stablecoincharts/all")
+    # 形如: [ { "date": 1609459200, "totalCirculating": { "peggedUSD": 45000000000 } }, ... ]
+    rows = []
+    for pt in all_series:
+        ts = pt.get("date")
+        tot = pt.get("totalCirculating", {})
+        usd = None
+        # 优先 peggedUSD；若无则兼容其他键
+        for k in ["peggedUSD", "peggedVAR", "peggedEUR"]:
+            if k in tot:
+                usd = tot[k]
+                break
+        if ts is None or usd is None:
+            continue
+        rows.append({"date": pd.to_datetime(ts, unit="s", utc=True).date(), "stable_total": float(usd)})
+    total = pd.DataFrame(rows)
 
-    # 2) total：先尝试 overview（可能 404），失败则用 coins 汇总
-    total = pd.DataFrame(columns=["date","stable_total"])
-    try:
-        j = http_get_json("https://stablecoins.llama.fi/overview")
-        save_raw(j, "stable_overview")
-        if isinstance(j, dict) and "total" in j:
-            tot = j["total"]
-            series = None
-            for k in ["chart","circulating","circulatingUSD","totalCirculatingUSD","total"]:
-                v = tot.get(k)
-                if isinstance(v, list) and v:
-                    series = v; break
-            if series:
-                first = series[0]
-                if isinstance(first, dict):
-                    rows=[]
-                    for pt in series:
-                        ts = pt.get("date")
-                        val = pt.get("totalCirculatingUSD") or pt.get("circulatingUSD") or pt.get("circulating") or pt.get("value")
-                        if ts is None or val is None: continue
-                        d = pd.to_datetime(ts, unit="s", utc=True).date() if isinstance(ts,(int,float)) else pd.to_datetime(ts).date()
-                        rows.append({"date": d, "stable_total": float(val)})
-                    total = pd.DataFrame(rows)
-                else:
-                    df = pd.DataFrame(series, columns=["ts","val"])
-                    df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.date
-                    total = df[["date"]].assign(stable_total=df["val"].astype(float))
-    except requests.HTTPError as e:
-        # 概览不可用（404/429等）时，忽略，用 coins 汇总
-        print(f"[WARN] stablecoins overview failed: {e}. Falling back to legacy aggregation.")
-    except Exception as e:
-        print(f"[WARN] stablecoins overview unexpected: {e}. Falling back to legacy aggregation.")
+    # 2) Top5：/stablecoins 列表里取最新 circulating.peggedUSD 排序
+    listing = http_get_json("https://stablecoins.llama.fi/stablecoins?includePrices=true")
+    assets = listing.get("peggedAssets", [])
+    latest_rows = []
+    id_map = {}  # id->symbol
+    for a in assets:
+        sid = a.get("id")
+        sym = a.get("symbol")
+        id_map[str(sid)] = sym
+        circ_obj = a.get("circulating", {})
+        # 当前快照 circulating.peggedUSD（有时嵌套在 chainCirculating.current.peggedUSD，这里按文档优先 circulating）
+        cur_usd = None
+        if isinstance(circ_obj, dict) and "peggedUSD" in circ_obj:
+            cur_usd = circ_obj.get("peggedUSD")
+        if cur_usd is not None:
+            latest_rows.append({"id": str(sid), "symbol": sym, "cur_usd": float(cur_usd)})
 
-    # 用 coins 汇总作为兜底（也是主路径）
-    if total.empty and not coins.empty:
-        total = (coins.groupby("date", as_index=False)["amount"]
-                 .sum().rename(columns={"amount":"stable_total"}))
+    latest_df = pd.DataFrame(latest_rows)
+    top_syms = []
+    if not latest_df.empty:
+        top_ids = latest_df.sort_values("cur_usd", ascending=False).head(5)["id"].tolist()
+        # 3) 拉每个稳定币历史：/stablecoin/{asset}
+        for asset_id in top_ids:
+            coin = http_get_json(f"https://stablecoins.llama.fi/stablecoin/{asset_id}")
+            # coin["totalCirculating"] 形如 [ { "date": 1609459200, "totalCirculating": 50000000000 }, ... ]
+            hist = coin.get("totalCirculating", [])
+            hrows = []
+            for pt in hist:
+                ts = pt.get("date")
+                val = pt.get("totalCirculating")
+                if ts is None or val is None:
+                    continue
+                hrows.append({"date": pd.to_datetime(ts, unit="s", utc=True).date(), "amount": float(val)})
+            hdf = pd.DataFrame(hrows)
+            sym = id_map.get(str(asset_id), str(asset_id))
+            if not hdf.empty:
+                path = DATA_PROC / f"stablecoins_top_{sym}.csv"
+                old = read_csv(path, ["date","amount"])
+                hdf = merge_on_date(old, hdf)
+                write_csv(hdf, path)
+                top_syms.append(sym)
 
-    # 合并/落盘
+    # 合并/落盘总量
     total_path = DATA_PROC / "stablecoins_total.csv"
     old_total = read_csv(total_path, ["date","stable_total"])
     if not total.empty:
@@ -143,7 +141,9 @@ def fetch_stablecoins():
         write_csv(total, total_path)
     else:
         total = old_total
+
     assert_non_empty(total, "Stablecoins total")
+    return total, top_syms
 
     # Top5 单币 CSV
     top_syms = []
@@ -314,26 +314,27 @@ def chain_series(chain_name):
         pass
     return pd.DataFrame(columns=["date","tvl"])
 
+# 替换 fetch_chains_total_and_top 的“总量”部分
 def fetch_chains_total_and_top(whitelist=None, top_k=5):
-    ov = http_get_json("https://api.llama.fi/overview/chains",
-                       params={"excludeTotalChart":"false","excludeChains":"true","dataType":"daily"})
-    chart = (ov.get("totalDataChart") or ov.get("totalChart")) or []
-    if chart:
-        df = pd.DataFrame(chart, columns=["ts","tvl"])
-        df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.date
-        total = df[["date","tvl"]].rename(columns={"tvl":"chain_total_tvl"})
+    # 全链合计历史：/v2/historicalChainTvl 公开端点
+    total_json = http_get_json("https://api.llama.fi/v2/historicalChainTvl")
+    tdf = pd.DataFrame(total_json)
+    if not tdf.empty:
+        tdf["date"] = pd.to_datetime(tdf["date"], unit="s", utc=True).dt.date
+        total = tdf[["date","tvl"]].rename(columns={"tvl":"chain_total_tvl"})
     else:
         total = pd.DataFrame(columns=["date","chain_total_tvl"])
+
     total_path = DATA_PROC / "chains_total.csv"
     old = read_csv(total_path, ["date","chain_total_tvl"])
     if not total.empty:
-        total["date"] = pd.to_datetime(total["date"]).dt.date
         total = merge_on_date(old, total)
         write_csv(total, total_path)
     else:
         total = old
     assert_non_empty(total, "Chains total TVL")
 
+    # TopK 单链：继续用 /overview/chains 列最新排名，单链历史仍用 /v2/historicalChainTvl/{chain} 兜底 /charts/{chain}
     ov2 = http_get_json("https://api.llama.fi/overview/chains",
                         params={"excludeTotalChart":"true","excludeChains":"false","dataType":"daily"})
     chains = ov2.get("chains") or []
@@ -344,8 +345,8 @@ def fetch_chains_total_and_top(whitelist=None, top_k=5):
     saved = []
     for _, r in top.iterrows():
         name = r["name"]
-        h = chain_series(name)
-        if h.empty: 
+        h = chain_series(name)  # 里面已优先调用 /v2/historicalChainTvl/{chain}，再兜底 /charts/{chain}
+        if h.empty:
             continue
         path = DATA_PROC / f"chain_{name}.csv"
         old = read_csv(path, ["date","tvl"])
@@ -354,6 +355,7 @@ def fetch_chains_total_and_top(whitelist=None, top_k=5):
         write_csv(h, path)
         saved.append(name)
     return total, saved
+
 
 # ---------- Plot ----------
 def plot_track_page(title, charts, footer):
