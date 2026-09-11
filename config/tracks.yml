@@ -1,18 +1,17 @@
 global:
-  lookback_days: 1095      # 3年
+  lookback_days: 1095
   top_k: 5
-  cg_sleep_sec: 0.6        # CoinGecko 速率控制
   output_dir: "docs/tracks"
 
 tracks:
-  - name: Chains - L1
-    metric: mcap
-    source: coingecko
+  - name: Chains (TVL)
+    metric: tvl
+    source: defillama_chains
     selection:
-      mode: whitelist_ids
-      ids: ["bitcoin","ethereum","solana","binancecoin","cardano","avalanche-2","tron","toncoin","polkadot","internet-computer"]
-    plot:
-      include_price_for_top: true
+      mode: top_by_chain_tvl
+      # 可选白名单，不写则按最新TVL取TopK：
+      whitelist: ["Ethereum","Tron","BSC","Arbitrum","Solana","Base","Optimism"]
+    plot: {}
 
   - name: Stablecoins
     metric: supply_usd
