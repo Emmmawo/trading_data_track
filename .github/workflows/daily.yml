@@ -30,6 +30,21 @@ jobs:
           curl -sS "https://api.llama.fi/overview/defi?excludeTotalChart=false&excludeProtocolChart=true&dataType=daily" | head -c 600 > docs/debug/defi_smoke.json || true
           curl -sS "https://api.llama.fi/overview/chains?excludeTotalChart=false&excludeChains=true&dataType=daily" | head -c 600 > docs/debug/chains_smoke.json || true
 
+      - name: Prepare docs and debug dir
+        run: |
+          mkdir -p docs/debug
+          echo "ping $(date -u +%F\ %T)" > docs/debug/ping.txt
+          # 禁用 Jekyll，避免 assets 被忽略
+          touch docs/.nojekyll
+
+      - name: Commit ping first
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs
+          git commit -m "debug ping $(date -u +%F\ %T)" || echo "no changes"
+          git push
+
       - name: Run tracks
         run: python -m scripts.run_tracks --config config/tracks.yml
 
