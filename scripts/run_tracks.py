@@ -382,6 +382,36 @@ def fetch_rwa_and_top(top_k=5):
 
 # ---------- Chains (TVL): /v2/historicalChainTvl (all) + /v2/historicalChainTvl/{chain} ----------
 # 参考文档: [2] /v2/historicalChainTvl, /v2/historicalChainTvl/{chain}
+
+def chain_series(chain_name):
+    try:
+        j = http_get_json(f"https://api.llama.fi/v2/historicalChainTvl/{chain_name}")
+        rows = []
+        for pt in (j or []):
+            d = ts_to_date(pt.get("date"))
+            tvl = pt.get("tvl")
+            if d and tvl is not None:
+                rows.append({"date": d, "tvl": float(tvl)})
+        if rows:
+            return pd.DataFrame(rows)
+    except Exception as e:
+        print(f"[WARN] Chain series primary failed for {chain_name}: {e}")
+
+    try:
+        j2 = http_get_json(f"https://api.llama.fi/charts/{chain_name}", max_retry=3)
+        rows = []
+        for pt in (j2 or []):
+            d = ts_to_date(pt.get("date"))
+            tvl = pt.get("totalLiquidityUSD") if isinstance(pt, dict) else None
+            if d and tvl is not None:
+                rows.append({"date": d, "tvl": float(tvl)})
+        if rows:
+            return pd.DataFrame(rows)
+    except Exception as e:
+        print(f"[WARN] Chain series fallback failed for {chain_name}: {e}")
+
+    return pd.DataFrame(columns=["date", "tvl"])
+
 def fetch_chains_total_and_top(whitelist=None, top_k=5):
     # 全链合计
     total_json = http_get_json("https://api.llama.fi/v2/historicalChainTvl")
