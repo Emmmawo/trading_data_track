@@ -1,5 +1,5 @@
 # scripts/build_index.py
-# usage: python scripts/build_index.py --docs docs/tracks
+# usage: python -m scripts.build_index --docs docs/tracks
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -23,6 +23,8 @@ def main():
 </body></html>"""
     Path("docs").mkdir(parents=True, exist_ok=True)
     Path("docs/index.html").write_text(body, encoding="utf-8")
+    # 禁用 Jekyll
+    (Path("docs") / ".nojekyll").write_text("", encoding="utf-8")
 
 if __name__ == "__main__":
     main()
